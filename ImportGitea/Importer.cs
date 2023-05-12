@@ -130,7 +130,9 @@ internal class Importer
 		Console.WriteLine("Setting comments");
 		SetComments();
 
-		Execute($"UPDATE issue_index SET max_index = {_issueInfo.Select(x => x.Value.GiteaIndex).Max()} where group_id = {_repoId}");
+		long maxIndex = _issueInfo.Select(x => x.Value.GiteaIndex).Max();
+        Execute($"insert into issue_index (group_id,max_index) values ({_repoId},{maxIndex})"
+                + $" ON DUPLICATE KEY UPDATE max_index={maxIndex}");
 	}
 
 	private long GetMaxIndex()
