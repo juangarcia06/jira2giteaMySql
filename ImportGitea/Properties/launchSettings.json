@@ -2,7 +2,7 @@
   "profiles": {
 		"ImportGitea": {
 			"commandName": "Project",
-			"commandLineArgs": "--RepoId 3 --JiraServer https://jira.server --JiraFilter 11600 --DbServer gitea.sql.server --DbName Gitea --DbUser gitea --DbUserPass 111111"
+			"commandLineArgs": "--RepoId 1 --JiraServer https://jira.server --JiraFilter filterId --JiraUser jiraUsername --JiraPassword 1111111 --DbServer localhost --DbName gitea --DbUser gitea --DbUserPass 111111"
 		}
   }
 }

@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using GenerateWhatsnew.Jira;
 using Microsoft.Data.SqlClient;
+using MySql.Data.MySqlClient;
 
 namespace ImportGitea;
 
@@ -13,7 +14,7 @@ internal class Importer
 	public const string DefaultUserId = "1";
 
 	private readonly long _repoId;
-	private readonly SqlConnection _sqlConnection;
+	private readonly MySqlConnection _sqlConnection;
 
 	private readonly HashSet<string> _labels = new();
 	private readonly Dictionary<string, FixVersion> _versions = new();
@@ -31,7 +32,7 @@ internal class Importer
 	public bool RemoveExistingIssues { get; set; } = true;
 
 	public Importer(long repoId, 
-		SqlConnection sqlConnection)
+		MySqlConnection sqlConnection)
 	{
 		_repoId = repoId;
 		_sqlConnection = sqlConnection;
@@ -126,7 +127,7 @@ internal class Importer
 		Console.WriteLine("Setting dependencies");
 		SetDependencies();
 
-		Console.WriteLine("Setting dependencies");
+		Console.WriteLine("Setting comments");
 		SetComments();
 
 		Execute($"UPDATE issue_index SET max_index = {_issueInfo.Select(x => x.Value.GiteaIndex).Max()} where group_id = {_repoId}");
@@ -151,13 +152,14 @@ internal class Importer
 
 	private void GenerateLabels()
 	{
-		Execute($"DELETE FROM label WHERE repo_id = {_repoId};");
+		Execute($"DELETE FROM `label` WHERE repo_id = {_repoId};");
 
 		foreach (var label in _labels)
 		{
 			ExecuteInsert("label", "repo_id, name", $"{_repoId}, {WrapToQuotes(label)}");
 		}
 	}
+
 
 
 	private void GenerateVersions()
@@ -174,7 +176,7 @@ internal class Importer
 			}
 
 			ExecuteInsert("milestone", "repo_id, name, is_closed, closed_date_unix, deadline_unix, content", 
-				$"{_repoId}, {WrapToQuotes(version.Name)}, {(version.Released ? "'True'" : "'False'")}"
+				$"{_repoId}, {WrapToQuotes(version.Name)}, {(version.Released ? 1 : 0)}"
 				+ $", {GetNullable(releaseDate?.ToUnixTimeSeconds())}, {releaseDate?.ToUnixTimeSeconds() ?? 253402264799}"
 				+ $", {WrapToQuotes(ConvertContent(version.Description ?? string.Empty))}");
 		}
@@ -207,7 +209,7 @@ internal class Importer
 						}
 						catch (DbException exc)
 						{
-							Console.Error.WriteLine(exc.ToString());
+							Console.WriteLine("Duplicate entry skipped.");
 						}
 					}
 				}
@@ -220,7 +222,7 @@ internal class Importer
 		foreach (var comment in _comments)
 		{
 			ExecuteInsert("comment",
-				@"""type"", poster_id, issue_id, created_unix, updated_unix, content",
+				"`type`, poster_id, issue_id, created_unix, updated_unix, content",
 				$"0, {GetUserId(comment.Author) ?? DefaultUserId}, {_issueInfo[comment.Key].GiteaId}, {comment.Created.ToUnixTimeSeconds()}, {comment.Updated.ToUnixTimeSeconds()}, {WrapToQuotes(ConvertContent(comment.Body))}");
 		}
 	}
@@ -232,7 +234,7 @@ internal class Importer
 			try
 			{
 				ExecuteInsert("issue_label", "label_id, issue_id",
-			$"(SELECT TOP(1) id FROM label WHERE name={WrapToQuotes(label)} AND repo_id={_repoId}), {issueId}");
+					$"(SELECT id FROM label WHERE name={WrapToQuotes(label)} AND repo_id={_repoId} LIMIT 1), {issueId}");
 			}
 			catch (DbException exc)
 			{
@@ -299,24 +301,37 @@ internal class Importer
 	private long ExecuteInsert(string table, string fields, string values)
 	{
 		using var cmd = _sqlConnection.CreateCommand();
-		cmd.CommandText = $"INSERT INTO \"{table}\"({fields}) OUTPUT INSERTED.id VALUES ({values})";
+		cmd.CommandText = $"INSERT INTO `{table}` ({fields}) VALUES ({values}); SELECT LAST_INSERT_ID();";
 
-		return (long)cmd.ExecuteScalar();
+		using (var reader = cmd.ExecuteReader())
+		{
+			if (reader.Read())
+			{
+				ulong insertedId = Convert.ToUInt64(reader[0]);
+				long id = (long)insertedId;
+				return id;
+			}
+		}
+
+		throw new Exception("Failed to retrieve the last inserted ID.");
 	}
+
+
+
 
 	class IssueInfo
 	{
 		public long GiteaId { get; set; }
 		public long GiteaIndex { get; set; }
 	}
-
-
+	
 	private void GenerateIssues()
 	{
 		if (RemoveExistingIssues)
 		{
 			Execute($"DELETE FROM issue WHERE repo_id = {_repoId};");
 		}
+
 
 		foreach (var issue in _issues)
 		{
@@ -328,38 +343,59 @@ internal class Importer
 			int dashIndex = issue.Key.IndexOf("-");
 			string jiraId = issue.Key.Substring(dashIndex + 1);
 
-
 			// Calculate new gitea index by incrementing max value.
-
 			string giteaIndex = _index++.ToString();
-
 			// If issues must be cleared, then we can calculate giteaIndex from jira key.
-
 			if (RemoveExistingIssues)
 			{
 				giteaIndex = jiraId;
 			}
-			
+        
 			var created = DateTimeOffset.Parse(issue.Fields.Created);
 			var updated = DateTimeOffset.Parse(issue.Fields.Updated);
 
 			var fixVersion = issue.Fields.FixVersions?.FirstOrDefault()?.Name ?? "<NONE>";
-
+			
 			long id = ExecuteInsert("issue",
-				 @"is_pull, repo_id, ""index"", poster_id, name, content"
+					@"is_pull, repo_id, `index`, poster_id, name, content"
 					+ ", is_closed, original_author, original_author_id, created_unix, updated_unix, closed_unix, milestone_id",
 
-				$"'False', {_repoId}, {giteaIndex}, {GetUserId(issue.Fields?.Reporter?.EmailAddress) ?? DefaultUserId}, {WrapToQuotes(GetIssueName(issue))}, {WrapToQuotes(GetIssueDescription(issue))}"
+					$"0, {_repoId}, {giteaIndex}, {GetUserId(issue.Fields?.Reporter?.EmailAddress) ?? DefaultUserId}, {WrapToQuotes(GetIssueName(issue))}, {WrapToQuotes(GetIssueDescription(issue))}"
 					+ $", {GetClosed(issue)}, '', 0, {created.ToUnixTimeSeconds()}, {updated.ToUnixTimeSeconds()}, {updated.ToUnixTimeSeconds()}"
 					+ $", (SELECT id FROM milestone WHERE name={WrapToQuotes(fixVersion)} AND repo_id={_repoId})");
+				
 
 			_issueInfo[issue.Key] = new IssueInfo
 			{
 				GiteaIndex = long.Parse(giteaIndex),
 				GiteaId = id
 			};
+
 		}
 	}
+	
+	
+
+private long ExecuteInsert(string table, string fields, string parameterNames, params MySqlParameter[] parameters)
+{
+    using var cmd = _sqlConnection.CreateCommand();
+    cmd.CommandText = $"INSERT INTO `{table}` ({fields}) VALUES ({parameterNames}); SELECT LAST_INSERT_ID();";
+    cmd.Parameters.AddRange(parameters);
+
+    using (var reader = cmd.ExecuteReader())
+    {
+        if (reader.Read())
+        {
+            ulong insertedId = Convert.ToUInt64(reader[0]);
+            long id = (long)insertedId;
+            return id;
+        }
+    }
+
+    throw new Exception("Failed to retrieve the last inserted ID.");
+}
+
+
 
 	private static string GetIssueDescription(Issue issue)
 	{
@@ -435,15 +471,15 @@ internal class Importer
 	}
 
 
-	private static string GetClosed(Issue issue)
+	private static int GetClosed(Issue issue)
 	{
-		return WrapToQuotes((issue.Fields?.Resolution != null) ? "True" : "False");
+		return (issue.Fields?.Resolution != null) ? 1 : 0;
 	}
-
 	
 	private static string WrapToQuotes(string value)
 	{
-		return $"'{value.Replace("'", "''")}'";
+		value = value.Replace("'", "''");
+		return $"'{value.Replace("\\", "\\\\")}'";
 	}
 
 	private string? GetUserId(string? email)
@@ -464,7 +500,7 @@ internal class Importer
 		// Find existing user
 
 		using var cmd = _sqlConnection.CreateCommand();
-		cmd.CommandText = $"SELECT id FROM [user] where email={WrapToQuotes(user.EmailAddress)}";
+		cmd.CommandText = $"SELECT id FROM `user` WHERE email = {WrapToQuotes(user.EmailAddress)}";
 		bool hasExistingUser = false;
 
 		using (var reader = cmd.ExecuteReader())
@@ -478,12 +514,24 @@ internal class Importer
 		}
 
 		if (!hasExistingUser)
-		{
-			long id = ExecuteInsert("user", "type, name, lower_name, email, passwd, avatar, avatar_email",
-				$"0, {WrapToQuotes(user.Name)}, {WrapToQuotes(user.Name.ToLowerInvariant())}, {WrapToQuotes(user.EmailAddress)}, 'restricT31!', 0x, {WrapToQuotes(user.EmailAddress)}");
+			using (var insertCmd = _sqlConnection.CreateCommand())
+			{
+				insertCmd.CommandText = $"INSERT INTO `user` (type, name, lower_name, email, passwd, avatar, avatar_email) " +
+				                        $"VALUES (@type, @name, @lowerName, @email, @passwd, @avatar, @avatarEmail)";
 
-			_userIds[user.EmailAddress] = id;
-		}
+				insertCmd.Parameters.AddWithValue("@type", 0);
+				insertCmd.Parameters.AddWithValue("@name", user.Name);
+				insertCmd.Parameters.AddWithValue("@lowerName", user.Name.ToLowerInvariant());
+				insertCmd.Parameters.AddWithValue("@email", user.EmailAddress);
+				insertCmd.Parameters.AddWithValue("@passwd", "giteaa");
+				insertCmd.Parameters.AddWithValue("@avatar", "https://www.gravatar.com/avatar/f584ef0e58a6058a8dc2c9668df3146e?d=mm&s=32");
+				insertCmd.Parameters.AddWithValue("@avatarEmail", user.EmailAddress);
+
+				insertCmd.ExecuteNonQuery();
+
+				long id = insertCmd.LastInsertedId;
+				_userIds[user.EmailAddress] = id;
+			}
 	}
 }
 

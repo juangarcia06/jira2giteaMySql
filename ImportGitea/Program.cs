@@ -1,9 +1,11 @@
-﻿using System.Net.Http.Headers;
+﻿using System.Net;
+using System.Net.Http.Headers;
 using System.Text;
 using GenerateWhatsnew.Jira;
 using ImportGitea;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
+using MySql.Data.MySqlClient;
 
 var builder = new ConfigurationBuilder()
 	.AddCommandLine(args);
@@ -24,7 +26,11 @@ if (!long.TryParse(config["RepoId"], out long repoId))
 	repoId = 1;
 }
 
-using var client = new HttpClient
+var handler = new HttpClientHandler();
+handler.ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) => true;
+
+
+using var client = new HttpClient(handler)
 {
 	BaseAddress = new Uri(jiraServer)
 };
@@ -35,22 +41,21 @@ client.DefaultRequestHeaders.Authorization =
 			Encoding.ASCII.GetBytes(
 			   $"{jiraUser}:{jiraPassword}")));
 
-var csb = new SqlConnectionStringBuilder
+var csb = new MySqlConnectionStringBuilder
 {
-	DataSource = dbServer,
-	InitialCatalog = dbName,
-	TrustServerCertificate = true,
+	Server = dbServer,
+	Database = dbName,
 	UserID = dbUser,
-	Password = dbUserPass
+	Password = dbUserPass,
 };
 
-using var sqlc = new SqlConnection(csb.ToString());
+using var sqlc = new MySqlConnection(csb.ToString());
 sqlc.Open();
 var loader = new Loader(client);
 
 var importer = new Importer(repoId, sqlc)
 {
-	RemoveExistingIssues = false
+	RemoveExistingIssues = true
 };
 
 Console.WriteLine("Loading JIRA tasks...");

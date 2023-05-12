@@ -24,7 +24,7 @@ internal class Loader
 		while (true)
 		{
 			var response = await _client.GetAsync($"/rest/api/2/search?startAt={start}&jql={filter}");
-
+			//Console.WriteLine(await response.Content.ReadAsStringAsync());
 			var r = await response.Content.ReadFromJsonAsync<IssueResponse>();
 
 			if (r == null)
