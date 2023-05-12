@@ -41,11 +41,10 @@ Written in C# and used to migrate issues from Jira to Gitea with MySQL. The scri
 
 
 
-
-
-2. **Customization:** Open the `Loader.cs` file and update the following parameters according to your needs:
-   - **Line 16:** Adjust the limit of data to fetch by modifying the value in the `limit` variable. If you wan't to fetch all put -1
-   - **Line 18:** Edit the starting issue by updating the value of the `start` variable.
+2. **Customization:** Update the following parameters according to your needs:
+   - **Loader.cs, Line 16:** Adjust the limit of data to fetch by modifying the value in the `limit` variable. If you wan't to fetch all put -1
+   - **Loader.cs, Line 18:** Edit the starting issue by updating the value of the `start` variable.
+   - **Importer.cs, Line 225:** Set the prefix that the Jira Issues have, in my case it is DEV, but if it is another you can change it there.
 
 3. **Code Formatting:** The `WrapToQuotes` function is used for formatting the code to avoid breaking the SQL parameters. If you get any SQL error, try adding something to the function.
 

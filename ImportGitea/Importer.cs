@@ -218,14 +218,46 @@ internal class Importer
 			}
 		}
 	}
+	
+	private string ConvertRelations(string input)
+	{
+		// Regular expression pattern to match "DEV-" followed by four numbers
+		string pattern = @"DEV-\d{4}";
+        
+		// Create a regular expression object
+		Regex regex = new Regex(pattern);
+        
+		// Check if the input string contains the pattern
+		string modifiedString = regex.Replace(input, match =>
+		{
+			// Get the matched value
+			string matchedValue = match.Value;
+            
+			// Extract the four numbers from the matched value
+			string numbers = matchedValue.Substring(4);
+            
+			// Construct the replacement string
+			string replacement = "#" + numbers;
+            
+			// Return the replacement string
+			return replacement;
+		});
+        
+		// Return the modified string
+		return modifiedString;
+        
+		// Return the modified string
+		//return input;
+	}
 
 	private void SetComments()
 	{
 		foreach (var comment in _comments)
 		{
+			
 			ExecuteInsert("comment",
 				"`type`, poster_id, issue_id, created_unix, updated_unix, content",
-				$"0, {GetUserId(comment.Author) ?? DefaultUserId}, {_issueInfo[comment.Key].GiteaId}, {comment.Created.ToUnixTimeSeconds()}, {comment.Updated.ToUnixTimeSeconds()}, {WrapToQuotes(ConvertContent(comment.Body))}");
+				$"0, {GetUserId(comment.Author) ?? DefaultUserId}, {_issueInfo[comment.Key].GiteaId}, {comment.Created.ToUnixTimeSeconds()}, {comment.Updated.ToUnixTimeSeconds()}, {ConvertRelations(WrapToQuotes(ConvertContent(comment.Body)))}");
 		}
 	}
 
